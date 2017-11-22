@@ -14,16 +14,20 @@
    function start() {
        socket = new eio.Socket('ws://192.168.15.214:3000/');
        socket.on('open', function(){
+           console.log(`[CCE] WS connected. Waiting for clients`);
            socket.on('message', function(data){
                const fData = JSON.parse(data);
                switch (fData.action){
                    case "cliAddClient":
+                       console.log(`[CCE] New client with id ${fData.id}`);
                        addClient(fData);
                        break;
                    case "cliCandidate":
+                       console.log(`[CCE] New candidate from ${fData.id}`);
                        addCandidate(fData);
                        break;
                    case "cliAnswer":
+                       console.log(`[CCE] New candidate from ${fData.id}`);
                        setAnswer(fData);
                        break;
                    default:
@@ -41,14 +45,18 @@
            pc:newPC,
            streams:[]
        };
+       let strCnt = 0;
        for(let clientId in clients) {
            if (clients.hasOwnProperty(clientId) && clientId !== data.id) {
                clients[clientId].streams.forEach((stream)=>{
                    newPC.addStream(stream);
+                   strCnt++;
                })
            }
        }
+       console.log(`[CCE] Send ${strCnt} streams to ${data.id}`);
        newPC.onicecandidate = (candidate)=>{
+           console.log(`[CCE] Candidate sent to ${data.id}`);
             socket.send(JSON.stringify({
                 id:data.id,
                 action:'srvCandidate',
@@ -56,17 +64,15 @@
             }))
        };
        newPC.onaddstream = (stream)=>{
-           console.log(stream);
+           console.log(`[CCE] New stream from ${data.id}`);
            clients[data.id].streams.push(stream.stream);
            for(let clientId in clients){
                if(clients.hasOwnProperty(clientId)&&clientId!==data.id){
+                   console.log(`[CCE] Stream from ${data.id} route to ${clientId}`);
                    clients[clientId].pc.addStream(stream.stream);
                }
            }
        };
-       newPC.onremovestream = (event)=>{
-           console.error(event)
-       }
        newPC.onnegotiationneeded = ()=>{
            newPC.createOffer()
                .then((offer)=>{
@@ -75,9 +81,27 @@
                        action:'srvOffer',
                        offer:offer
                    }));
+                   console.log(`[CCE] New reinvite sent to ${data.id}`);
                    newPC.setLocalDescription(offer);
                });
        };
+
+       newPC.oniceconnectionstatechange = (event)=>{
+           console.log(`[CCE] ICE state changed to ${event.target.iceConnectionState} for ${data.id} `);
+           if(event.target.iceConnectionState==="disconnected"){
+               console.log(`[CCE] ${data.id} now disconnected`);
+               for(let clientId in clients){
+                   if(clients.hasOwnProperty(clientId)&&clientId!==data.id){
+                       console.log(`[CCE] Remove stream from ${data.id} for ${clientId}`);
+                       clients[data.id].streams.forEach((stream)=>{
+                           clients[clientId].pc.removeStream(stream);
+                       })
+                   }
+               }
+               clients[data.id].pc.close();
+               delete clients[data.id];
+           }
+       }
 
        newPC.setRemoteDescription(data.offer)
            .then(()=>{ return newPC.createAnswer()})
@@ -87,6 +111,7 @@
                    action:'srvAnswer',
                    answer:answer
                }));
+               console.log(`[CCE] Initial answer sent to ${data.id}`);
                newPC.setLocalDescription(answer);
            })
    }
