@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Server p2p</title>
+    <script src="/engine.io.js"></script>
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+</head>
+<body onload="start()">
+</body>
+<script>
+    let clients = {};
+    let socket;
+   function start() {
+       socket = new eio.Socket('ws://192.168.15.214:3000/');
+       socket.on('open', function(){
+           socket.on('message', function(data){
+               const fData = JSON.parse(data);
+               switch (fData.action){
+                   case "cliAddClient":
+                       addClient(fData);
+                       break;
+                   case "cliCandidate":
+                       addCandidate(fData);
+                       break;
+                   case "cliAnswer":
+                       setAnswer(fData);
+                       break;
+                   default:
+                       console.warn(`Unknown action ${fData.action}`);
+                       break;
+               }
+           });
+           socket.on('close', function(){});
+       });
+   }
+   function addClient(data) {
+       const newPC = new RTCPeerConnection({});
+       clients[data.id] = {
+           id:data.id,
+           pc:newPC,
+           streams:[]
+       };
+       for(let clientId in clients) {
+           if (clients.hasOwnProperty(clientId) && clientId !== data.id) {
+               clients[clientId].streams.forEach((stream)=>{
+                   newPC.addStream(stream);
+               })
+           }
+       }
+       newPC.onicecandidate = (candidate)=>{
+            socket.send(JSON.stringify({
+                id:data.id,
+                action:'srvCandidate',
+                candidate:candidate.candidate
+            }))
+       };
+       newPC.onaddstream = (stream)=>{
+           console.log(stream);
+           clients[data.id].streams.push(stream.stream);
+           for(let clientId in clients){
+               if(clients.hasOwnProperty(clientId)&&clientId!==data.id){
+                   clients[clientId].pc.addStream(stream.stream);
+               }
+           }
+       };
+       newPC.onremovestream = (event)=>{
+           console.error(event)
+       }
+       newPC.onnegotiationneeded = ()=>{
+           newPC.createOffer()
+               .then((offer)=>{
+                   socket.send(JSON.stringify({
+                       id:data.id,
+                       action:'srvOffer',
+                       offer:offer
+                   }));
+                   newPC.setLocalDescription(offer);
+               });
+       };
+
+       newPC.setRemoteDescription(data.offer)
+           .then(()=>{ return newPC.createAnswer()})
+           .then((answer)=>{
+               socket.send(JSON.stringify({
+                   id:data.id,
+                   action:'srvAnswer',
+                   answer:answer
+               }));
+               newPC.setLocalDescription(answer);
+           })
+   }
+
+   function addCandidate(data) {
+       if(clients[data.id]){
+           clients[data.id].pc.addIceCandidate(data.candidate);
+       }
+   }
+
+   function setAnswer(data) {
+       if(clients[data.id]){
+           clients[data.id].pc.setRemoteDescription(data.answer);
+       }
+   }
+
+</script>
+</html>

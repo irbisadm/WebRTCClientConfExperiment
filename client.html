@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Client p2p</title>
+    <script src="/engine.io.js"></script>
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+</head>
+<style>
+    #localVideo{
+        width: 140px;
+        position: fixed;
+        top:15px;
+        right: 15px;
+        border: solid #000 1px;
+        min-height: 70px;
+        display: block;
+        border-radius: 0;
+    }
+    .videoHolder{
+        display: -ms-flexbox;
+        display: -webkit-flex;
+        display: flex;
+        -webkit-flex-direction: row;
+        -ms-flex-direction: row;
+        flex-direction: row;
+        -webkit-flex-wrap: wrap;
+        -ms-flex-wrap: wrap;
+        flex-wrap: wrap;
+        -webkit-justify-content: flex-start;
+        -ms-flex-pack: start;
+        justify-content: flex-start;
+        -webkit-align-content: stretch;
+        -ms-flex-line-pack: stretch;
+        align-content: stretch;
+        -webkit-align-items: flex-start;
+        -ms-flex-align: start;
+        align-items: flex-start;
+    }
+    .videoHolder video{
+        -webkit-order: 0;
+        -ms-flex-order: 0;
+        order: 0;
+        -webkit-flex: 0 1 auto;
+        -ms-flex: 0 1 auto;
+        flex: 0 1 auto;
+        -webkit-align-self: auto;
+        -ms-flex-item-align: auto;
+        align-self: auto;
+        max-width: 33.333%;
+    }
+</style>
+<body onload="start()">
+<video id="localVideo"></video>
+<div class="videoHolder"></div>
+</body>
+<script>
+    let socket;
+    let pc;
+    const thisId = Math.random().toString(36).replace(/[^a-z]+/g, '').substr(0, 5);
+   function start() {
+       socket = new eio.Socket('ws://192.168.15.214:3000/');
+       socket.on('open', function(){
+           socket.on('message', function(data){
+               const fData = JSON.parse(data);
+               switch (fData.action){
+                   case 'srvCandidate':
+                       onCandidate(fData);
+                       break;
+                   case 'srvOffer':
+                       onServerOffer(fData);
+                       break;
+                   case 'srvAnswer':
+                       onAnswer(fData);
+                       break;
+                   default:
+                       console.warn(`Unknown action ${fData.action}`);
+                       break;
+               }
+           });
+           socket.on('close', function(){});
+           navigator.mediaDevices.getUserMedia({audio:true,video:true})
+               .then((stream)=>{
+                    document.querySelector('#localVideo').srcObject = stream;
+                    document.querySelector('#localVideo').play();
+                    pc = new RTCPeerConnection({});
+                    pc.addStream(stream);
+                    pc.createOffer()
+                        .then((offer)=>{
+                            socket.send(JSON.stringify({
+                                id:thisId,
+                                action:'cliAddClient',
+                                offer:offer
+                            }));
+                            pc.setLocalDescription(offer);
+                        });
+                   pc.onaddstream = (stream)=>{
+                        const videoHolder = document.querySelector('.videoHolder');
+                        const videoEl = document.createElement('video');
+                        videoHolder.appendChild(videoEl);
+                        videoEl.srcObject = stream.stream;
+                        videoEl.play();
+                   };
+                   pc.onicecandidate = (candidate)=>{
+                       console.log(candidate);
+                       socket.send(JSON.stringify({
+                           id:thisId,
+                           action:'cliCandidate',
+                           candidate:candidate.candidate
+                       }))
+                   };
+               })
+       });
+   }
+   function onCandidate(data) {
+       if(data.id===thisId){
+           pc.addIceCandidate(data.candidate);
+       }
+   }
+   function onAnswer(data) {
+       if(data.id===thisId){
+           pc.setRemoteDescription(data.answer);
+       }
+   }
+   function onServerOffer(data) {
+       if(data.id===thisId){
+           pc.setRemoteDescription(data.offer)
+               .then(()=>{return pc.createAnswer()})
+               .then((answer)=>{
+                   socket.send(JSON.stringify({
+                       id:thisId,
+                       action:'cliAnswer',
+                       answer:answer
+                   }));
+                   pc.setLocalDescription(answer);
+               });
+       }
+   }
+
+</script>
+</html>
